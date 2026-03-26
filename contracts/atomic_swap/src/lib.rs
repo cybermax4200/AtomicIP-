@@ -28,7 +28,7 @@ pub enum DataKey {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SwapStatus {
     Pending,
     Accepted,
@@ -43,6 +43,7 @@ pub struct SwapRecord {
     pub seller: Address,
     pub buyer: Address,
     pub price: i128,
+    pub token: Address,
     pub status: SwapStatus,
 }
 
@@ -69,20 +70,17 @@ impl AtomicSwap {
         let seller = env.current_contract_address();
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
-        let swap = SwapRecord {
-            ip_id,
-            seller,
-            buyer,
-            price,
-            status: SwapStatus::Pending,
-        };
+        let swap = SwapRecord { ip_id, seller, buyer, price, token, status: SwapStatus::Pending };
 
         env.storage().persistent().set(&DataKey::Swap(id), &swap);
-        env.storage().instance().set(&DataKey::NextId, &(id + 1));
+        env.storage().persistent().set(&DataKey::NextId, &(id + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::NextId, TTL_THRESHOLD, TTL_BUMP);
         id
     }
 
-    /// Buyer accepts the swap and sends payment (payment handled by token contract in full impl).
+    /// Buyer accepts the swap and transfers payment into contract escrow.
     pub fn accept_swap(env: Env, swap_id: u64) {
         let mut swap: SwapRecord = env
             .storage()
@@ -90,12 +88,18 @@ impl AtomicSwap {
             .get(&DataKey::Swap(swap_id))
             .expect("swap not found");
 
+        swap.buyer.require_auth();
         assert!(swap.status == SwapStatus::Pending, "swap not pending");
+        swap.buyer.require_auth();
+
+        token::Client::new(&env, &swap.token)
+            .transfer(&swap.buyer, &env.current_contract_address(), &swap.price);
+
         swap.status = SwapStatus::Accepted;
         env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
     }
 
-    /// Seller reveals the decryption key; payment releases.
+    /// Seller reveals the decryption key; escrowed payment releases to seller.
     pub fn reveal_key(env: Env, swap_id: u64, _decryption_key: BytesN<32>) {
         let mut swap: SwapRecord = env
             .storage()
@@ -103,14 +107,19 @@ impl AtomicSwap {
             .get(&DataKey::Swap(swap_id))
             .expect("swap not found");
 
+        swap.seller.require_auth();
         assert!(swap.status == SwapStatus::Accepted, "swap not accepted");
-        // Full impl: verify key against IP commitment, then transfer escrowed payment
+        swap.seller.require_auth();
+
+        token::Client::new(&env, &swap.token)
+            .transfer(&env.current_contract_address(), &swap.seller, &swap.price);
+
         swap.status = SwapStatus::Completed;
         env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
     }
 
-    /// Cancel a swap (invalid key or timeout).
-    pub fn cancel_swap(env: Env, swap_id: u64) {
+    /// Cancel a swap — only seller or buyer; refunds buyer if payment was escrowed.
+    pub fn cancel_swap(env: Env, swap_id: u64, caller: Address) {
         let mut swap: SwapRecord = env
             .storage()
             .persistent()
@@ -121,6 +130,14 @@ impl AtomicSwap {
             swap.status == SwapStatus::Pending || swap.status == SwapStatus::Accepted,
             "swap already finalised"
         );
+        assert!(caller == swap.seller || caller == swap.buyer, "unauthorised");
+        caller.require_auth();
+
+        if swap.status == SwapStatus::Accepted {
+            token::Client::new(&env, &swap.token)
+                .transfer(&env.current_contract_address(), &swap.buyer, &swap.price);
+        }
+
         swap.status = SwapStatus::Cancelled;
         env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
     }
