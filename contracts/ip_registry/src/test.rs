@@ -1,13 +1,12 @@
-use soroban_sdk::{Address, BytesN, Env, Vec};
-use crate::{IpRegistry, IpRecord};
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::IpRecord;
     use soroban_sdk::contractclient;
     use soroban_sdk::testutils::Address as TestAddress;
+    use soroban_sdk::{Address, BytesN, Env, Vec};
 
     #[contractclient(name = "IpRegistryClient")]
+    #[allow(dead_code)]
     pub trait IpRegistry {
         fn commit_ip(env: Env, owner: Address, commitment_hash: BytesN<32>) -> u64;
         fn get_ip(env: Env, ip_id: u64) -> IpRecord;
@@ -17,13 +16,13 @@ mod tests {
     #[test]
     fn test_commit_ip_sequential_ids() {
         let env = Env::default();
-        let contract_id = env.register_contract(None, IpRegistry);
+        let contract_id = env.register(crate::IpRegistry, ());
         let client = IpRegistryClient::new(&env, &contract_id);
 
         // Create test addresses using the test environment
         let owner1 = <Address as TestAddress>::generate(&env);
         let owner2 = <Address as TestAddress>::generate(&env);
-        
+
         // Create test commitment hashes
         let commitment1 = BytesN::from_array(&env, &[1u8; 32]);
         let commitment2 = BytesN::from_array(&env, &[2u8; 32]);
@@ -47,17 +46,17 @@ mod tests {
 
         assert_eq!(record1.owner, owner1);
         assert_eq!(record1.commitment_hash, commitment1);
-        
+
         assert_eq!(record2.owner, owner2);
         assert_eq!(record2.commitment_hash, commitment2);
-        
+
         assert_eq!(record3.owner, owner1);
         assert_eq!(record3.commitment_hash, commitment3);
 
         // Verify owner index is correct
         let owner1_ips = client.list_ip_by_owner(&owner1);
         let owner2_ips = client.list_ip_by_owner(&owner2);
-        
+
         assert_eq!(owner1_ips.len(), 2);
         assert_eq!(owner2_ips.len(), 1);
         assert_eq!(owner1_ips.get(0).unwrap(), id1);

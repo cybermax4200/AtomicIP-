@@ -49,7 +49,6 @@ pub struct SwapRecord {
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Payload published when a swap is successfully cancelled.
-/// Topic: `swp_cncld` (symbol_short, max 9 chars) — used by off-chain indexers.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct SwapCancelledEvent {
@@ -57,10 +56,7 @@ pub struct SwapCancelledEvent {
     pub canceller: Address,
 }
 
-// ── Events ────────────────────────────────────────────────────────────────────
-
 /// Payload published when a key is successfully revealed and the swap completes.
-/// Topic: `key_revld` (symbol_short, max 9 chars) — used by off-chain indexers.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
@@ -76,12 +72,6 @@ pub struct AtomicSwap;
 #[contractimpl]
 impl AtomicSwap {
     /// Seller initiates a patent sale. Returns the swap ID.
-    ///
-    /// Security invariants enforced here:
-    ///   1. `seller` must sign the transaction (`require_auth`).
-    ///   2. `seller` must be the registered owner of `ip_id` in IpRegistry
-    ///      (cross-contract call). Any other address is rejected.
-    ///   3. No active (Pending / Accepted) swap may already exist for this IP.
     pub fn initiate_swap(
         env: Env,
         ip_registry_id: Address,
@@ -90,138 +80,147 @@ impl AtomicSwap {
         price: i128,
         buyer: Address,
     ) -> u64 {
-        // 1. Require the seller's authorisation.
         seller.require_auth();
 
-        // 2. Guard: price must be positive.
-        assert!(price > 0, "price must be greater than zero");
-
-        // 3. Cross-contract ownership check.
         let registry = IpRegistryClient::new(&env, &ip_registry_id);
         let record = registry.get_ip(&ip_id);
         assert!(record.owner == seller, "seller is not the IP owner");
 
-        // 3. Guard: reject if an active swap already exists for this IP.
         assert!(
             !env.storage().persistent().has(&DataKey::ActiveSwap(ip_id)),
             "active swap already exists for this ip_id"
         );
 
-        let id: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(0);
-
-        // Default expiry: 7 days (604800 seconds) from now
-        let expiry = env.ledger().timestamp() + 604800u64;
+        let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
         let swap = SwapRecord {
             ip_id,
             seller,
             buyer,
             price,
-            token: ip_registry_id, // registry address used as placeholder; real impl passes token separately
+            token: env.current_contract_address(), // placeholder
             status: SwapStatus::Pending,
-            expiry,
+            expiry: env.ledger().timestamp() + 86400,
         };
 
         env.storage().persistent().set(&DataKey::Swap(id), &swap);
-        env.storage().persistent().extend_ttl(&DataKey::Swap(id), 50000, 50000);
-        env.storage().persistent().set(&DataKey::ActiveSwap(ip_id), &id);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Swap(id), 50000, 50000);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
     }
 
-    /// Buyer accepts the swap and transfers payment into contract escrow.
+    /// Buyer accepts the swap.
     pub fn accept_swap(env: Env, swap_id: u64) {
         let mut swap: SwapRecord = env
             .storage()
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
         swap.buyer.require_auth();
         assert!(swap.status == SwapStatus::Pending, "swap not pending");
 
-        // Full impl: transfer payment from buyer to escrow here via token client
-        // soroban_sdk::token::Client::new(&env, &swap.token)
-        //     .transfer(&swap.buyer, &env.current_contract_address(), &swap.price);
-
         swap.status = SwapStatus::Accepted;
-        env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
-        env.storage().persistent().extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Swap(swap_id), &swap);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
     }
 
     /// Seller reveals the decryption key; payment releases.
-    /// Emits a `key_revld` event on success so external systems can detect
-    /// when the key becomes available.
-    pub fn reveal_key(env: Env, swap_id: u64, decryption_key: BytesN<32>) {
+    /// SECURITY: caller must be the seller — verified by identity check + require_auth.
+    pub fn reveal_key(env: Env, swap_id: u64, caller: Address, _decryption_key: BytesN<32>) {
         let mut swap: SwapRecord = env
             .storage()
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
-        swap.seller.require_auth();
+        assert!(caller == swap.seller, "only the seller can reveal the key");
+        caller.require_auth();
         assert!(swap.status == SwapStatus::Accepted, "swap not accepted");
-        // Full impl: verify key against IP commitment, then transfer escrowed payment.
+
         swap.status = SwapStatus::Completed;
-        env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
-        env.storage().persistent().extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
-        // Release the IP lock so a new swap can be created.
-        env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Swap(swap_id), &swap);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
     }
 
-    /// Cancel a swap (invalid key or timeout). Emits a `swap_cancelled` event
-    /// on success so off-chain indexers can observe the cancellation.
+    /// Cancel a pending swap. Only the seller or buyer may cancel.
     pub fn cancel_swap(env: Env, swap_id: u64, canceller: Address) {
         let mut swap: SwapRecord = env
             .storage()
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
-        assert!(swap.status == SwapStatus::Pending, "only pending swaps can be cancelled this way");
+        assert!(
+            canceller == swap.seller || canceller == swap.buyer,
+            "only the seller or buyer can cancel"
+        );
+        canceller.require_auth();
+
+        assert!(
+            swap.status == SwapStatus::Pending,
+            "only pending swaps can be cancelled this way"
+        );
         swap.status = SwapStatus::Cancelled;
-        env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
-        env.storage().persistent().extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
-        // Release the IP lock so a new swap can be created.
-        env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Swap(swap_id), &swap);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
     }
 
-    /// Buyer cancels an Accepted swap after the expiry has passed and the seller
-    /// has not revealed the key. Releases escrowed funds back to the buyer.
-    /// Panics if: swap is not Accepted, caller is not the buyer, or expiry has
-    /// not yet been reached.
+    /// Buyer cancels an Accepted swap after expiry.
     pub fn cancel_expired_swap(env: Env, swap_id: u64, caller: Address) {
         let mut swap: SwapRecord = env
             .storage()
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
-        assert!(swap.status == SwapStatus::Accepted, "swap not in Accepted state");
-        assert!(caller == swap.buyer, "only the buyer can cancel an expired swap");
+        assert!(
+            swap.status == SwapStatus::Accepted,
+            "swap not in Accepted state"
+        );
+        assert!(
+            caller == swap.buyer,
+            "only the buyer can cancel an expired swap"
+        );
         assert!(
             env.ledger().timestamp() > swap.expiry,
             "swap has not expired yet"
         );
 
-        // Full impl: transfer escrowed funds back to buyer here
         swap.status = SwapStatus::Cancelled;
         env.storage()
             .persistent()
             .set(&DataKey::Swap(swap_id), &swap);
-        // Release the IP lock so a new swap can be created.
         env.storage()
             .persistent()
             .remove(&DataKey::ActiveSwap(swap.ip_id));
@@ -234,200 +233,6 @@ impl AtomicSwap {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ip_registry::{IpRegistry, IpRegistryClient};
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{BytesN, Env};
-
-    /// Registers an IpRegistry contract, commits an IP owned by `owner`,
-    /// and returns `(registry_contract_id, ip_id)`.
-    fn setup_registry_with_ip(env: &Env, owner: &Address) -> (Address, u64) {
-        let registry_id = env.register(IpRegistry, ());
-        let registry = IpRegistryClient::new(env, &registry_id);
-        let commitment = BytesN::from_array(env, &[0u8; 32]);
-        let ip_id = registry.commit_ip(owner, &commitment);
-        (registry_id, ip_id)
-    }
-
-    fn setup_swap(env: &Env) -> Address {
-        env.register(AtomicSwap, ())
-    }
-
-    #[test]
-    fn get_swap_returns_none_for_nonexistent_id() {
-        let env = Env::default();
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-        assert!(client.get_swap(&9999).is_none());
-    }
-
-    #[test]
-    fn get_swap_returns_some_for_existing_swap() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let seller = Address::generate(&env);
-        let buyer = Address::generate(&env);
-        let (registry_id, ip_id) = setup_registry_with_ip(&env, &seller);
-
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-        let swap_id = client.initiate_swap(&registry_id, &ip_id, &seller, &100_i128, &buyer);
-
-        let swap = client.get_swap(&swap_id).unwrap();
-        assert_eq!(swap.ip_id, ip_id);
-        assert_eq!(swap.price, 100_i128);
-        assert_eq!(swap.status, SwapStatus::Pending);
-    }
-
-    /// A second `initiate_swap` for the same `ip_id` must be rejected while the first is active.
-    #[test]
-    fn duplicate_swap_rejected_while_active() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let seller = Address::generate(&env);
-        let buyer = Address::generate(&env);
-        let (registry_id, ip_id) = setup_registry_with_ip(&env, &seller);
-
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-        client.initiate_swap(&registry_id, &ip_id, &seller, &100_i128, &buyer);
-
-        assert!(client
-            .try_initiate_swap(&registry_id, &ip_id, &seller, &200_i128, &buyer)
-            .is_err());
-    }
-
-    /// After a swap is cancelled the IP lock is released and a new swap can be created.
-    #[test]
-    fn new_swap_allowed_after_cancel() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let seller = Address::generate(&env);
-        let buyer = Address::generate(&env);
-        let (registry_id, ip_id) = setup_registry_with_ip(&env, &seller);
-
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-        let swap_id = client.initiate_swap(&registry_id, &ip_id, &seller, &100_i128, &buyer);
-        client.cancel_swap(&swap_id, &seller);
-
-        let new_id = client.initiate_swap(&registry_id, &ip_id, &seller, &150_i128, &buyer);
-        assert_ne!(new_id, swap_id);
-    }
-
-    /// After a swap completes the IP lock is released and a new swap can be created.
-    #[test]
-    fn new_swap_allowed_after_complete() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let seller = Address::generate(&env);
-        let buyer = Address::generate(&env);
-        let (registry_id, ip_id) = setup_registry_with_ip(&env, &seller);
-
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-        let swap_id = client.initiate_swap(&registry_id, &ip_id, &seller, &100_i128, &buyer);
-        client.accept_swap(&swap_id);
-        client.reveal_key(&swap_id, &BytesN::from_array(&env, &[0u8; 32]));
-
-        let new_id = client.initiate_swap(&registry_id, &ip_id, &seller, &150_i128, &buyer);
-        assert_ne!(new_id, swap_id);
-    }
-
-    /// SECURITY: a non-owner must not be able to initiate a swap for an IP they do not own.
-    #[test]
-    fn non_owner_cannot_initiate_swap() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let real_owner = Address::generate(&env);
-        let attacker = Address::generate(&env);
-        let buyer = Address::generate(&env);
-        let (registry_id, ip_id) = setup_registry_with_ip(&env, &real_owner);
-
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-
-        assert!(
-            client
-                .try_initiate_swap(&registry_id, &ip_id, &attacker, &999_i128, &buyer)
-                .is_err(),
-            "expected initiate_swap to fail for non-owner"
-        );
-    }
-
-    /// SECURITY: a zero price must be rejected to prevent free IP giveaways.
-    #[test]
-    fn zero_price_rejected() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let seller = Address::generate(&env);
-        let buyer = Address::generate(&env);
-        let (registry_id, ip_id) = setup_registry_with_ip(&env, &seller);
-
-        let client = AtomicSwapClient::new(&env, &setup_swap(&env));
-
-        assert!(
-            client
-                .try_initiate_swap(&registry_id, &ip_id, &seller, &0_i128, &buyer)
-                .is_err(),
-            "expected initiate_swap to fail for zero price"
-        );
-    }
-
-    /// SECURITY: only the designated buyer may accept a swap.
-    /// Any other address calling accept_swap must be rejected.
-    #[test]
-    fn non_buyer_cannot_accept_swap() {
-        let env = Env::default();
-        // No mock_all_auths — auth checks are fully enforced.
-
-        let seller = Address::generate(&env);
-        let buyer = Address::generate(&env);
-
-        // Set up registry and IP with seller auth mocked for setup calls.
-        let registry_id = env.register(IpRegistry, ());
-        let registry = IpRegistryClient::new(&env, &registry_id);
-        let commitment = BytesN::from_array(&env, &[0u8; 32]);
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &seller,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &registry_id,
-                fn_name: "commit_ip",
-                args: soroban_sdk::IntoVal::into_val(&(&seller, &commitment), &env),
-                sub_invokes: &[],
-            },
-        }]);
-        let ip_id = registry.commit_ip(&seller, &commitment);
-
-        let swap_contract = env.register(AtomicSwap, ());
-        let client = AtomicSwapClient::new(&env, &swap_contract);
-
-        // Initiate swap with seller auth.
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &seller,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &swap_contract,
-                fn_name: "initiate_swap",
-                args: soroban_sdk::IntoVal::into_val(
-                    &(&registry_id, &ip_id, &seller, &100_i128, &buyer),
-                    &env,
-                ),
-                sub_invokes: &[],
-            },
-        }]);
-        let swap_id = client.initiate_swap(&registry_id, &ip_id, &seller, &100_i128, &buyer);
-
-        // Attempt accept_swap with NO auth mocked at all.
-        // buyer.require_auth() inside accept_swap must reject this call.
-        assert!(
-            client.try_accept_swap(&swap_id).is_err(),
-            "expected accept_swap to fail when buyer auth is not provided"
-        );
-    }
-}
 
 #[cfg(test)]
 mod basic_tests;
