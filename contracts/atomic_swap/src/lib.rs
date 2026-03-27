@@ -118,7 +118,9 @@ impl AtomicSwap {
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
         swap.buyer.require_auth();
@@ -141,7 +143,9 @@ impl AtomicSwap {
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
         assert!(caller == swap.seller, "only the seller can reveal the key");
@@ -164,7 +168,9 @@ impl AtomicSwap {
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
         assert!(
@@ -193,7 +199,9 @@ impl AtomicSwap {
             .persistent()
             .get(&DataKey::Swap(swap_id))
             .unwrap_or_else(|| {
-                env.panic_with_error(Error::from_contract_error(ContractError::SwapNotFound as u32))
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::SwapNotFound as u32,
+                ))
             });
 
         assert!(
