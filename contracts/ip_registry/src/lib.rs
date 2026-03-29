@@ -205,7 +205,10 @@ impl IpRegistry {
         }
         env.storage()
             .persistent()
-            .set(&DataKey::OwnerIps(old_owner), &old_ids);
+            .set(&DataKey::OwnerIps(old_owner.clone()), &old_ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::OwnerIps(old_owner), 50000, 50000);
 
         // Add to new owner's index
         let mut new_ids: Vec<u64> = env
@@ -217,6 +220,9 @@ impl IpRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::OwnerIps(new_owner.clone()), &new_ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::OwnerIps(new_owner.clone()), 50000, 50000);
 
         // Update commitment index
         env.storage().persistent().set(
