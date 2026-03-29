@@ -142,6 +142,14 @@ impl IpRegistry {
             .persistent()
             .extend_ttl(&DataKey::OwnerIps(owner.clone()), 50000, 50000);
 
+        // Track commitment hash ownership and extend TTL
+        env.storage()
+            .persistent()
+            .set(&DataKey::CommitmentOwner(commitment_hash.clone()), &owner);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::CommitmentOwner(commitment_hash.clone()), 50000, 50000);
+
         env.storage().persistent().set(&DataKey::NextId, &(id + 1));
         env.storage().persistent().extend_ttl(&DataKey::NextId, 50000, 50000);
 
