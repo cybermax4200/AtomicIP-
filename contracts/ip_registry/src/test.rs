@@ -358,4 +358,28 @@ mod tests {
         let bob_ips = client.list_ip_by_owner(&bob).expect("bob should have IPs after transfer");
         assert!(bob_ips.iter().any(|x| x == ip_id));
     }
+
+    /// Issue #145: Verify IpRecord is still accessible after transfer
+    #[test]
+    fn test_transfer_ip_record_accessible() {
+        let env = Env::default();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let alice = <Address as TestAddress>::generate(&env);
+        let bob = <Address as TestAddress>::generate(&env);
+        let commitment = BytesN::from_array(&env, &[13u8; 32]);
+
+        env.mock_all_auths();
+        let ip_id = client.commit_ip(&alice, &commitment);
+
+        // Transfer to bob
+        client.transfer_ip(&ip_id, &bob);
+
+        // Verify record is still accessible and owner is updated
+        let record = client.get_ip(&ip_id);
+        assert_eq!(record.owner, bob);
+        assert_eq!(record.ip_id, ip_id);
+        assert_eq!(record.commitment_hash, commitment);
+    }
 }
