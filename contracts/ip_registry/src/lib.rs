@@ -15,6 +15,12 @@ pub enum ContractError {
     UnauthorizedUpgrade = 5,
 }
 
+// ── TTL ───────────────────────────────────────────────────────────────────────
+
+/// Minimum ledger TTL bump applied to every persistent storage write.
+/// ~1 year at ~5s per ledger: 365 * 24 * 3600 / 5 ≈ 6_307_200 ledgers.
+pub const LEDGER_BUMP: u32 = 6_307_200;
+
 // ── Storage Keys ────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -125,7 +131,7 @@ impl IpRegistry {
             .set(&DataKey::IpRecord(id), &record);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::IpRecord(id), 50000, 50000);
+            .extend_ttl(&DataKey::IpRecord(id), LEDGER_BUMP, LEDGER_BUMP);
 
         // Append to owner index
         let mut ids: Vec<u64> = env
@@ -139,7 +145,7 @@ impl IpRegistry {
             .set(&DataKey::OwnerIps(owner.clone()), &ids);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::OwnerIps(owner.clone()), 50000, 50000);
+            .extend_ttl(&DataKey::OwnerIps(owner.clone()), LEDGER_BUMP, LEDGER_BUMP);
 
         // Track commitment hash ownership and extend TTL
         env.storage()
@@ -150,7 +156,18 @@ impl IpRegistry {
             .extend_ttl(&DataKey::CommitmentOwner(commitment_hash.clone()), 50000, 50000);
 
         env.storage().persistent().set(&DataKey::NextId, &(id + 1));
-        env.storage().persistent().extend_ttl(&DataKey::NextId, 50000, 50000);
+        env.storage().persistent().extend_ttl(&DataKey::NextId, LEDGER_BUMP, LEDGER_BUMP);
+
+        // Track commitment → owner mapping (for duplicate detection and transfer)
+        env.storage().persistent().set(
+            &DataKey::CommitmentOwner(commitment_hash.clone()),
+            &owner,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::CommitmentOwner(commitment_hash.clone()),
+            LEDGER_BUMP,
+            LEDGER_BUMP,
+        );
 
         env.events().publish(
             (symbol_short!("ip_commit"), owner.clone()),
@@ -225,6 +242,11 @@ impl IpRegistry {
         env.storage().persistent().set(
             &DataKey::CommitmentOwner(record.commitment_hash.clone()),
             &new_owner,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::CommitmentOwner(record.commitment_hash.clone()),
+            LEDGER_BUMP,
+            LEDGER_BUMP,
         );
 
         record.owner = new_owner;
