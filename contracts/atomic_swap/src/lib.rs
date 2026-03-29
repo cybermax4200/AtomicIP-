@@ -110,7 +110,7 @@ pub struct SwapCancelledEvent {
     pub canceller: Address,
 }
 
-/// Payload published when a key is successfully revealed and the swap completes.
+/// Payload published when a swap is successfully revealed and the swap completes.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
@@ -145,6 +145,17 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32,  // 0-10000 (0.00% - 100.00%)
     pub treasury: Address,
     pub dispute_window_seconds: u64,
+}
+
+/// Payload published when a new swap is successfully initiated.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapInitiatedEvent {
+    pub swap_id: u64,
+    pub ip_id: u64,
+    pub seller: Address,
+    pub buyer: Address,
+    pub price: i128,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
