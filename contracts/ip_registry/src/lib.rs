@@ -16,6 +16,12 @@ pub enum ContractError {
     IpAlreadyRevoked = 4,
 }
 
+// ── TTL ───────────────────────────────────────────────────────────────────────
+
+/// Minimum ledger TTL bump applied to every persistent storage write.
+/// ~1 year at ~5s per ledger: 365 * 24 * 3600 / 5 ≈ 6_307_200 ledgers.
+pub const LEDGER_BUMP: u32 = 6_307_200;
+
 // ── Storage Keys ────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -126,7 +132,7 @@ impl IpRegistry {
             .set(&DataKey::IpRecord(id), &record);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::IpRecord(id), 50000, 50000);
+            .extend_ttl(&DataKey::IpRecord(id), LEDGER_BUMP, LEDGER_BUMP);
 
         // Append to owner index
         let mut ids: Vec<u64> = env
@@ -140,10 +146,21 @@ impl IpRegistry {
             .set(&DataKey::OwnerIps(owner.clone()), &ids);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::OwnerIps(owner.clone()), 50000, 50000);
+            .extend_ttl(&DataKey::OwnerIps(owner.clone()), LEDGER_BUMP, LEDGER_BUMP);
 
         env.storage().persistent().set(&DataKey::NextId, &(id + 1));
-        env.storage().persistent().extend_ttl(&DataKey::NextId, 50000, 50000);
+        env.storage().persistent().extend_ttl(&DataKey::NextId, LEDGER_BUMP, LEDGER_BUMP);
+
+        // Track commitment → owner mapping (for duplicate detection and transfer)
+        env.storage().persistent().set(
+            &DataKey::CommitmentOwner(commitment_hash.clone()),
+            &owner,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::CommitmentOwner(commitment_hash.clone()),
+            LEDGER_BUMP,
+            LEDGER_BUMP,
+        );
 
         env.events().publish(
             (symbol_short!("ip_commit"), owner.clone()),
@@ -197,7 +214,10 @@ impl IpRegistry {
         }
         env.storage()
             .persistent()
-            .set(&DataKey::OwnerIps(old_owner), &old_ids);
+            .set(&DataKey::OwnerIps(old_owner.clone()), &old_ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::OwnerIps(old_owner.clone()), LEDGER_BUMP, LEDGER_BUMP);
 
         // Add to new owner's index
         let mut new_ids: Vec<u64> = env
@@ -209,17 +229,28 @@ impl IpRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::OwnerIps(new_owner.clone()), &new_ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::OwnerIps(new_owner.clone()), LEDGER_BUMP, LEDGER_BUMP);
 
         // Update commitment index
         env.storage().persistent().set(
             &DataKey::CommitmentOwner(record.commitment_hash.clone()),
             &new_owner,
         );
+        env.storage().persistent().extend_ttl(
+            &DataKey::CommitmentOwner(record.commitment_hash.clone()),
+            LEDGER_BUMP,
+            LEDGER_BUMP,
+        );
 
         record.owner = new_owner;
         env.storage()
             .persistent()
             .set(&DataKey::IpRecord(ip_id), &record);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::IpRecord(ip_id), LEDGER_BUMP, LEDGER_BUMP);
     }
 
     /// Revoke an IP record, marking it as invalid.
@@ -250,6 +281,9 @@ impl IpRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::IpRecord(ip_id), &record);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::IpRecord(ip_id), LEDGER_BUMP, LEDGER_BUMP);
     }
 
     /// Retrieve an IP record by ID.

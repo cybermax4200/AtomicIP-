@@ -22,6 +22,12 @@ pub enum ContractError {
     IpIsRevoked = 14,
 }
 
+// ── TTL ───────────────────────────────────────────────────────────────────────
+
+/// Minimum ledger TTL bump applied to every persistent storage write.
+/// ~1 year at ~5s per ledger: 365 * 24 * 3600 / 5 ≈ 6_307_200 ledgers.
+pub const LEDGER_BUMP: u32 = 6_307_200;
+
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -174,10 +180,13 @@ impl AtomicSwap {
         env.storage().persistent().set(&DataKey::Swap(id), &swap);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::Swap(id), 50000, 50000);
+            .extend_ttl(&DataKey::Swap(id), LEDGER_BUMP, LEDGER_BUMP);
         env.storage()
             .persistent()
             .set(&DataKey::ActiveSwap(ip_id), &id);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveSwap(ip_id), LEDGER_BUMP, LEDGER_BUMP);
 
         // Append to seller index
         let mut seller_ids: Vec<u64> = env
@@ -191,7 +200,7 @@ impl AtomicSwap {
             .set(&DataKey::SellerSwaps(swap.seller.clone()), &seller_ids);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::SellerSwaps(swap.seller.clone()), 50000, 50000);
+            .extend_ttl(&DataKey::SellerSwaps(swap.seller.clone()), LEDGER_BUMP, LEDGER_BUMP);
 
         // Append to buyer index
         let mut buyer_ids: Vec<u64> = env
@@ -205,7 +214,7 @@ impl AtomicSwap {
             .set(&DataKey::BuyerSwaps(swap.buyer.clone()), &buyer_ids);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::BuyerSwaps(swap.buyer.clone()), 50000, 50000);
+            .extend_ttl(&DataKey::BuyerSwaps(swap.buyer.clone()), LEDGER_BUMP, LEDGER_BUMP);
 
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
@@ -264,7 +273,7 @@ impl AtomicSwap {
             .set(&DataKey::Swap(swap_id), &swap);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
+            .extend_ttl(&DataKey::Swap(swap_id), LEDGER_BUMP, LEDGER_BUMP);
     }
 
     /// Seller reveals the decryption key; payment releases only if the key is valid.
@@ -340,7 +349,7 @@ impl AtomicSwap {
             .set(&DataKey::Swap(swap_id), &swap);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
+            .extend_ttl(&DataKey::Swap(swap_id), LEDGER_BUMP, LEDGER_BUMP);
 
         // Transfer escrowed payment to seller (Issue #34)
         token::Client::new(&env, &swap.token).transfer(
@@ -409,7 +418,7 @@ impl AtomicSwap {
             .set(&DataKey::Swap(swap_id), &swap);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
+            .extend_ttl(&DataKey::Swap(swap_id), LEDGER_BUMP, LEDGER_BUMP);
         // Release the IP lock so a new swap can be created.
         env.storage()
             .persistent()
@@ -470,6 +479,9 @@ impl AtomicSwap {
         env.storage()
             .persistent()
             .set(&DataKey::Swap(swap_id), &swap);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Swap(swap_id), LEDGER_BUMP, LEDGER_BUMP);
         env.storage()
             .persistent()
             .remove(&DataKey::ActiveSwap(swap.ip_id));
