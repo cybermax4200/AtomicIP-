@@ -37,10 +37,10 @@ mod tests {
         let id2 = client.commit_ip(&owner2, &commitment2);
         let id3 = client.commit_ip(&owner1, &commitment3);
 
-        // Assert IDs are sequential: 0, 1, 2
-        assert_eq!(id1, 0, "First commit should return ID 0");
-        assert_eq!(id2, 1, "Second commit should return ID 1");
-        assert_eq!(id3, 2, "Third commit should return ID 2");
+        // Assert IDs are sequential: 1, 2, 3 (first ID is 1, not 0)
+        assert_eq!(id1, 1, "First commit should return ID 1");
+        assert_eq!(id2, 2, "Second commit should return ID 2");
+        assert_eq!(id3, 3, "Third commit should return ID 3");
 
         // Verify the records are stored correctly
         let record1 = client.get_ip(&id1);
@@ -247,7 +247,7 @@ mod tests {
         client.revoke_ip(&ip_id); // must panic with IpAlreadyRevoked (code 4)
     }
 
-    /// Issue: Verify commit_ip assigns IDs sequentially (0, 1, 2).
+    /// Issue: Verify commit_ip assigns IDs sequentially (1, 2, 3).
     #[test]
     fn test_sequential_ip_ids() {
         let env = Env::default();
@@ -260,9 +260,9 @@ mod tests {
         let id1 = client.commit_ip(&owner, &BytesN::from_array(&env, &[2u8; 32]));
         let id2 = client.commit_ip(&owner, &BytesN::from_array(&env, &[3u8; 32]));
 
-        assert_eq!(id0, 0);
-        assert_eq!(id1, 1);
-        assert_eq!(id2, 2);
+        assert_eq!(id0, 1);
+        assert_eq!(id1, 2);
+        assert_eq!(id2, 3);
     }
 
     /// Issue: verify_commitment returns false for a wrong secret.
