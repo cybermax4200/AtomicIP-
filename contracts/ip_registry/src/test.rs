@@ -11,7 +11,12 @@ mod tests {
     pub trait IpRegistry {
         fn commit_ip(env: Env, owner: Address, commitment_hash: BytesN<32>) -> u64;
         fn get_ip(env: Env, ip_id: u64) -> IpRecord;
-        fn verify_commitment(env: Env, ip_id: u64, secret: BytesN<32>, blinding_factor: BytesN<32>) -> bool;
+        fn verify_commitment(
+            env: Env,
+            ip_id: u64,
+            secret: BytesN<32>,
+            blinding_factor: BytesN<32>,
+        ) -> bool;
         fn list_ip_by_owner(env: Env, owner: Address) -> Vec<u64>;
         fn transfer_ip(env: Env, ip_id: u64, new_owner: Address);
         fn revoke_ip(env: Env, ip_id: u64);
@@ -59,8 +64,8 @@ mod tests {
         assert_eq!(record3.commitment_hash, commitment3);
 
         // Verify owner index is correct
-        let owner1_ips = client.list_ip_by_owner(&owner1).unwrap();
-        let owner2_ips = client.list_ip_by_owner(&owner2).unwrap();
+        let owner1_ips = client.list_ip_by_owner(&owner1);
+        let owner2_ips = client.list_ip_by_owner(&owner2);
 
         assert_eq!(owner1_ips.len(), 2);
         assert_eq!(owner2_ips.len(), 1);
