@@ -634,7 +634,7 @@ impl AtomicSwap {
 mod tests {
     use super::*;
     use ip_registry::{IpRegistry, IpRegistryClient};
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::{token, BytesN, Env};
     use soroban_sdk::token::StellarAssetClient;
 
@@ -905,6 +905,68 @@ mod tests {
 
         let swap = client.get_swap(&swap_id).expect("swap should exist");
         assert_eq!(swap.status, SwapStatus::Accepted, "swap should remain Accepted");
+    }
+
+    #[test]
+    fn cancel_expired_swap_after_failed_partial_reveal_preserves_state_consistency() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+
+        let secret = BytesN::from_array(&env, &[12u8; 32]);
+        let blinding = BytesN::from_array(&env, &[13u8; 32]);
+        let mut preimage = soroban_sdk::Bytes::new(&env);
+        preimage.append(&soroban_sdk::Bytes::from(secret.clone()));
+        preimage.append(&soroban_sdk::Bytes::from(blinding.clone()));
+        let commitment_hash: BytesN<32> = env.crypto().sha256(&preimage).into();
+
+        let registry_id = env.register(IpRegistry, ());
+        let registry = IpRegistryClient::new(&env, &registry_id);
+        let ip_id = registry.commit_ip(&seller, &commitment_hash);
+
+        let token_id = setup_token(&env, &admin, &buyer, 500);
+        let swap_contract = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &swap_contract);
+        let token_client = token::Client::new(&env, &token_id);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        client.accept_swap(&swap_id);
+
+        assert_eq!(token_client.balance(&buyer), 0);
+        assert_eq!(token_client.balance(&swap_contract), 500);
+        assert!(env.storage().persistent().has(&DataKey::ActiveSwap(ip_id)));
+
+        let wrong_secret = BytesN::from_array(&env, &[14u8; 32]);
+        assert!(
+            client
+                .try_reveal_key(&swap_id, &seller, &wrong_secret, &blinding)
+                .is_err(),
+            "expected reveal_key to reject a partial or invalid reveal"
+        );
+
+        let accepted_swap = client.get_swap(&swap_id).expect("swap should still exist");
+        assert_eq!(accepted_swap.status, SwapStatus::Accepted);
+        assert_eq!(token_client.balance(&buyer), 0);
+        assert_eq!(token_client.balance(&swap_contract), 500);
+        assert!(env.storage().persistent().has(&DataKey::ActiveSwap(ip_id)));
+
+        env.ledger().with_mut(|ledger| {
+            ledger.timestamp = accepted_swap.expiry + 1;
+        });
+
+        client.cancel_expired_swap(&swap_id, &buyer);
+
+        let cancelled_swap = client.get_swap(&swap_id).expect("swap should still exist");
+        assert_eq!(cancelled_swap.status, SwapStatus::Cancelled);
+        assert_eq!(token_client.balance(&buyer), 500);
+        assert_eq!(token_client.balance(&swap_contract), 0);
+        assert!(!env.storage().persistent().has(&DataKey::ActiveSwap(ip_id)));
+
+        let new_swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &400_i128, &buyer);
+        assert_ne!(new_swap_id, swap_id);
     }
 
     /// SECURITY: a revoked IP must not be swappable.
