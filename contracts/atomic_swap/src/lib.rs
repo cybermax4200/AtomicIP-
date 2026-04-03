@@ -3,7 +3,7 @@ mod registry;
 mod swap;
 mod utils;
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Bytes, Env, Error, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, BytesN, Bytes, Env, Error, Vec};
 
 mod validation;
 use validation::*;
@@ -193,8 +193,7 @@ impl AtomicSwap {
 
         // Initialize admin on first call if not set
         if !env.storage().persistent().has(&DataKey::Admin) {
-            let admin = env.deployer();
-            env.storage().persistent().set(&DataKey::Admin, &admin);
+            env.storage().persistent().set(&DataKey::Admin, &seller);
             env.storage().persistent().extend_ttl(&DataKey::Admin, 50000, 50000);
         }
 
@@ -322,7 +321,7 @@ impl AtomicSwap {
         if fee_amount > 0 {
             token_client.transfer(&env.current_contract_address(), &config.treasury, &fee_amount);
             env.events().publish(
-                (soroban_sdk::symbol_short!("protocol_fee"),),
+                (soroban_sdk::symbol_short!("proto_fee"),),
                 ProtocolFeeEvent {
                     swap_id,
                     fee_amount,
@@ -381,7 +380,7 @@ impl AtomicSwap {
         );
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("swap_cancel"),),
+            (soroban_sdk::symbol_short!("s_cancel"),),
             SwapCancelledEvent {
                 swap_id,
                 canceller: caller,
@@ -390,14 +389,13 @@ impl AtomicSwap {
     }
 
     /// Admin-only contract upgrade.
-    pub fn upgrade(env: Env, new_wasm_hash: Bytes) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin_opt = env.storage().persistent().get(&DataKey::Admin);
         if admin_opt.is_none() {
             env.panic_with_error(Error::from_contract_error(ContractError::UnauthorizedUpgrade as u32));
         }
-        let admin = admin_opt.unwrap();
-        let invoker = env.invoker();
-        if invoker != admin {
+        let admin: Address = admin_opt.unwrap();
+        if admin != admin {
             env.panic_with_error(Error::from_contract_error(ContractError::UnauthorizedUpgrade as u32));
         }
         admin.require_auth();
@@ -417,17 +415,17 @@ impl AtomicSwap {
             ));
         }
 
-        let invoker = env.invoker();
+        let caller = env.current_contract_address();
         let admin: Address = if let Some(admin) = env.storage().persistent().get(&DataKey::Admin) {
             admin
         } else {
-            invoker.require_auth();
-            env.storage().persistent().set(&DataKey::Admin, &invoker);
+            caller.require_auth();
+            env.storage().persistent().set(&DataKey::Admin, &caller);
             env.storage().persistent().extend_ttl(&DataKey::Admin, LEDGER_BUMP, LEDGER_BUMP);
-            invoker.clone()
+            caller.clone()
         };
 
-        if invoker != admin {
+        if caller != admin {
             env.panic_with_error(Error::from_contract_error(
                 ContractError::UnauthorizedUpgrade as u32,
             ));
@@ -455,7 +453,7 @@ impl AtomicSwap {
             .get(&DataKey::ProtocolConfig)
             .unwrap_or(ProtocolConfig {
                 protocol_fee_bps: 0,
-                treasury: env.deployer(),
+                treasury: env.current_contract_address(),
                 dispute_window_seconds: 86400,
             })
     }
