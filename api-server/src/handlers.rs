@@ -1,4 +1,5 @@
 use axum::{extract::Path, http::StatusCode, Json};
+use crate::auth;
 use crate::schemas::*;
 
 /// Timestamp a new IP commitment. Returns the assigned IP ID.
@@ -234,4 +235,54 @@ pub async fn get_swap(Path(swap_id): Path<u64>) -> Result<Json<SwapRecord>, (Sta
             error: format!("Swap {} not found", swap_id),
         }),
     ))
+}
+
+/// Authenticate with Stellar keypair and receive JWT tokens.
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    tag = "Auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Authenticated successfully", body = AuthResponse),
+        (status = 401, description = "Invalid signature", body = ErrorResponse),
+        (status = 400, description = "Invalid public key", body = ErrorResponse),
+    )
+)]
+pub async fn login(Json(body): Json<LoginRequest>) -> Result<Json<AuthResponse>, auth::AuthError> {
+    if !auth::verify_stellar_signature(&body.public_key, &body.message, &body.signature)? {
+        return Err(auth::AuthError::InvalidToken);
+    }
+
+    let (access_token, refresh_token) = auth::issue_tokens(&body.public_key)
+        .map_err(|_| auth::AuthError::TokenCreation)?;
+
+    Ok(Json(AuthResponse {
+        access_token,
+        refresh_token,
+        token_type: "Bearer".to_string(),
+        expires_in: 900, // 15 minutes
+    }))
+}
+
+/// Refresh access token using a valid refresh token.
+#[utoipa::path(
+    post,
+    path = "/auth/refresh",
+    tag = "Auth",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Token refreshed", body = AuthResponse),
+        (status = 401, description = "Invalid refresh token", body = ErrorResponse),
+    )
+)]
+pub async fn refresh_token(Json(body): Json<RefreshRequest>) -> Result<Json<AuthResponse>, auth::AuthError> {
+    let access_token = auth::refresh_access_token(&body.refresh_token)?;
+
+    Ok(Json(AuthResponse {
+        access_token,
+        refresh_token: body.refresh_token,
+        token_type: "Bearer".to_string(),
+        expires_in: 900,
+    }))
 }
