@@ -1,5 +1,6 @@
 use axum::{extract::Path, http::StatusCode, Json};
 use crate::schemas::*;
+use crate::webhook;
 
 /// Timestamp a new IP commitment. Returns the assigned IP ID.
 #[utoipa::path(
@@ -138,6 +139,8 @@ pub async fn initiate_swap(Json(body): Json<InitiateSwapRequest>) -> Result<Json
 )]
 pub async fn accept_swap(Path(swap_id): Path<u64>, Json(body): Json<AcceptSwapRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.accept_swap
+    // Trigger webhook on status change (Pending -> Accepted)
+    webhook::trigger_swap_status_changed(swap_id, Some("Pending".to_string()), "Accepted".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -161,6 +164,8 @@ pub async fn accept_swap(Path(swap_id): Path<u64>, Json(body): Json<AcceptSwapRe
 )]
 pub async fn reveal_key(Path(swap_id): Path<u64>, Json(body): Json<RevealKeyRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.reveal_key
+    // Trigger webhook on status change (Accepted -> Completed)
+    webhook::trigger_swap_status_changed(swap_id, Some("Accepted".to_string()), "Completed".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -184,6 +189,8 @@ pub async fn reveal_key(Path(swap_id): Path<u64>, Json(body): Json<RevealKeyRequ
 )]
 pub async fn cancel_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelSwapRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.cancel_swap
+    // Trigger webhook on status change (Pending -> Cancelled)
+    webhook::trigger_swap_status_changed(swap_id, Some("Pending".to_string()), "Cancelled".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -207,6 +214,8 @@ pub async fn cancel_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelSwapRe
 )]
 pub async fn cancel_expired_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelExpiredSwapRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.cancel_expired_swap
+    // Trigger webhook on status change (Accepted -> Cancelled)
+    webhook::trigger_swap_status_changed(swap_id, Some("Accepted".to_string()), "Cancelled".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -234,4 +243,66 @@ pub async fn get_swap(Path(swap_id): Path<u64>) -> Result<Json<SwapRecord>, (Sta
             error: format!("Swap {} not found", swap_id),
         }),
     ))
+}
+
+/// Register a webhook URL to receive swap event notifications.
+#[utoipa::path(
+    post,
+    path = "/webhooks",
+    tag = "Webhooks",
+    request_body = RegisterWebhookRequest,
+    responses(
+        (status = 200, description = "Webhook registered", body = WebhookResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn register_webhook(Json(body): Json<RegisterWebhookRequest>) -> Result<Json<WebhookResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if body.url.is_empty() || body.events.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "URL and events are required".to_string(),
+            }),
+        ));
+    }
+
+    let config = webhook::register(body.url, body.events);
+
+    Ok(Json(WebhookResponse {
+        id: config.id.to_string(),
+        url: config.url,
+        events: config.events,
+        created_at: config.created_at,
+    }))
+}
+
+/// Unregister a webhook by ID.
+#[utoipa::path(
+    delete,
+    path = "/webhooks/{id}",
+    tag = "Webhooks",
+    params(("id" = String, Path, description = "Webhook UUID")),
+    responses(
+        (status = 200, description = "Webhook unregistered"),
+        (status = 404, description = "Webhook not found", body = ErrorResponse),
+    )
+)]
+pub async fn unregister_webhook(Path(id): Path<String>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let uuid = uuid::Uuid::parse_str(&id).map_err(|_| (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: "Invalid webhook ID format".to_string(),
+        }),
+    ))?;
+
+    if webhook::unregister(uuid) {
+        Ok(StatusCode::OK)
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Webhook {} not found", id),
+            }),
+        ))
+    }
 }
