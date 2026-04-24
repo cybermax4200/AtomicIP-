@@ -3,8 +3,8 @@
 //! This module provides reusable validation functions to reduce code duplication
 //! and ensure consistent error handling across the contract.
 
-use soroban_sdk::{Address, BytesN, Env, Error};
 use crate::{ContractError, DataKey, IpRecord};
+use soroban_sdk::{Address, BytesN, Env, Error};
 
 /// Retrieves an IP record by ID, panicking if not found.
 ///
@@ -25,9 +25,7 @@ pub fn require_ip_exists(env: &Env, ip_id: u64) -> IpRecord {
         .persistent()
         .get(&DataKey::IpRecord(ip_id))
         .unwrap_or_else(|| {
-            env.panic_with_error(Error::from_contract_error(
-                ContractError::IpNotFound as u32,
-            ))
+            env.panic_with_error(Error::from_contract_error(ContractError::IpNotFound as u32))
         })
 }
 
@@ -50,6 +48,8 @@ pub fn require_non_zero_commitment(env: &Env, commitment_hash: &BytesN<32>) {
 }
 
 /// Validates that the commitment hash is not already registered.
+/// If already registered, emits a "collision" event with the existing owner's address,
+/// then panics with CommitmentAlreadyRegistered.
 ///
 /// # Arguments
 ///
@@ -60,11 +60,16 @@ pub fn require_non_zero_commitment(env: &Env, commitment_hash: &BytesN<32>) {
 ///
 /// Panics with `CommitmentAlreadyRegistered` error if the hash is already registered.
 pub fn require_unique_commitment(env: &Env, commitment_hash: &BytesN<32>) {
-    if env
+    if let Some(existing_owner) = env
         .storage()
         .persistent()
-        .has(&DataKey::CommitmentOwner(commitment_hash.clone()))
+        .get::<DataKey, Address>(&DataKey::CommitmentOwner(commitment_hash.clone()))
     {
+        // Emit event so callers can identify the existing owner
+        env.events().publish(
+            (symbol_short!("collision"), commitment_hash.clone()),
+            existing_owner,
+        );
         env.panic_with_error(Error::from_contract_error(
             ContractError::CommitmentAlreadyRegistered as u32,
         ));
@@ -100,6 +105,7 @@ pub fn require_not_revoked(env: &Env, record: &IpRecord) {
 /// # Panics
 ///
 /// Panics with an auth error if caller is not the owner.
+#[allow(dead_code)]
 pub fn require_owner(env: &Env, caller: &Address, record: &IpRecord) {
     if caller != &record.owner {
         env.panic_with_error(Error::from_contract_error(
@@ -118,6 +124,7 @@ pub fn require_owner(env: &Env, caller: &Address, record: &IpRecord) {
 /// # Panics
 ///
 /// Panics with `UnauthorizedUpgrade` error if caller is not the admin or admin is not initialized.
+#[allow(dead_code)]
 pub fn require_admin(env: &Env, caller: &Address) {
     let admin: Address = env
         .storage()
@@ -185,6 +192,8 @@ mod tests {
             commitment_hash: BytesN::from_array(&env, &[1u8; 32]),
             timestamp: 0,
             revoked: false,
+            expiry_timestamp: 0,
+            metadata: soroban_sdk::Bytes::new(&env),
         };
         // Should not panic
         require_not_revoked(&env, &record);
@@ -200,6 +209,8 @@ mod tests {
             commitment_hash: BytesN::from_array(&env, &[1u8; 32]),
             timestamp: 0,
             revoked: true,
+            expiry_timestamp: 0,
+            metadata: soroban_sdk::Bytes::new(&env),
         };
         require_not_revoked(&env, &record);
     }
@@ -214,6 +225,8 @@ mod tests {
             commitment_hash: BytesN::from_array(&env, &[1u8; 32]),
             timestamp: 0,
             revoked: false,
+            expiry_timestamp: 0,
+            metadata: soroban_sdk::Bytes::new(&env),
         };
         // Should not panic
         require_owner(&env, &owner, &record);
@@ -231,6 +244,8 @@ mod tests {
             commitment_hash: BytesN::from_array(&env, &[1u8; 32]),
             timestamp: 0,
             revoked: false,
+            expiry_timestamp: 0,
+            metadata: soroban_sdk::Bytes::new(&env),
         };
         require_owner(&env, &not_owner, &record);
     }
