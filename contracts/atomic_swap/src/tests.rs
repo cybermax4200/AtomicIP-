@@ -330,4 +330,61 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 50);
         client.auto_resolve_dispute(&swap_id); // must panic DisputeResolutionTimeout=25
     }
+
+    #[test]
+    fn test_cancel_swap_stores_manual_cancel_reason() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let (registry_id, ip_id, _, _) = setup_registry(&env, &seller);
+        let token_id = setup_token(&env, &admin, &buyer, 500);
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        client.cancel_swap(&swap_id, &seller);
+
+        let reason = client.get_cancellation_reason(&swap_id).unwrap();
+        assert_eq!(reason, soroban_sdk::Bytes::from_slice(&env, b"manual_cancel"));
+    }
+
+    #[test]
+    fn test_cancel_expired_swap_stores_expired_reason() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let (registry_id, ip_id, _, _) = setup_registry(&env, &seller);
+        let token_id = setup_token(&env, &admin, &buyer, 500);
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        client.accept_swap(&swap_id);
+        // Advance past expiry (initiation timestamp=0, expiry=604800)
+        env.ledger().with_mut(|l| l.timestamp = 604801);
+        client.cancel_expired_swap(&swap_id, &buyer);
+
+        let reason = client.get_cancellation_reason(&swap_id).unwrap();
+        assert_eq!(reason, soroban_sdk::Bytes::from_slice(&env, b"expired"));
+    }
+
+    #[test]
+    fn test_no_reason_for_non_cancelled_swap() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let (registry_id, ip_id, _, _) = setup_registry(&env, &seller);
+        let token_id = setup_token(&env, &admin, &buyer, 500);
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        assert!(client.get_cancellation_reason(&swap_id).is_none());
+    }
 }

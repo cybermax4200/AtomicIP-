@@ -4,7 +4,7 @@ mod swap;
 mod utils;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Error, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, Error, Vec,
 };
 
 mod validation;
@@ -69,6 +69,8 @@ pub enum DataKey {
     ProtocolConfig,
     Paused,
     IpSwaps(u64),
+    /// Maps swap_id → cancellation reason bytes. Set only when a swap is cancelled.
+    CancelReason(u64),
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -423,6 +425,10 @@ impl AtomicSwap {
             swap::save_swap(&env, swap_id, &swap);
             env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
             token_client.transfer(&env.current_contract_address(), &swap.buyer, &swap.price);
+            env.storage().persistent().set(
+                &DataKey::CancelReason(swap_id),
+                &Bytes::from_slice(&env, b"dispute_refund"),
+            );
         } else {
             swap.status = SwapStatus::Completed;
             swap::save_swap(&env, swap_id, &swap);
@@ -469,6 +475,11 @@ impl AtomicSwap {
             &swap.price,
         );
 
+        env.storage().persistent().set(
+            &DataKey::CancelReason(swap_id),
+            &Bytes::from_slice(&env, b"dispute_timeout"),
+        );
+
         env.events().publish(
             (soroban_sdk::symbol_short!("disp_res"),),
             DisputeResolvedEvent { swap_id, refunded: true },
@@ -494,6 +505,11 @@ impl AtomicSwap {
         env.storage()
             .persistent()
             .remove(&DataKey::ActiveSwap(swap.ip_id));
+
+        env.storage().persistent().set(
+            &DataKey::CancelReason(swap_id),
+            &Bytes::from_slice(&env, b"manual_cancel"),
+        );
 
         env.events().publish(
             (soroban_sdk::symbol_short!("swap_cncl"),),
@@ -525,6 +541,11 @@ impl AtomicSwap {
             &env.current_contract_address(),
             &swap.buyer,
             &swap.price,
+        );
+
+        env.storage().persistent().set(
+            &DataKey::CancelReason(swap_id),
+            &Bytes::from_slice(&env, b"expired"),
         );
 
         env.events().publish(
@@ -667,6 +688,11 @@ impl AtomicSwap {
     /// Read a swap record. Returns `None` if the swap_id does not exist.
     pub fn get_swap(env: Env, swap_id: u64) -> Option<SwapRecord> {
         env.storage().persistent().get(&DataKey::Swap(swap_id))
+    }
+
+    /// Returns the cancellation reason for a swap, or `None` if not cancelled / reason not set.
+    pub fn get_cancellation_reason(env: Env, swap_id: u64) -> Option<Bytes> {
+        env.storage().persistent().get(&DataKey::CancelReason(swap_id))
     }
 
     /// Returns the total number of swaps created.

@@ -28,6 +28,8 @@ pub enum DataKey {
     IpSwaps(u64),
     /// Whether the contract is paused (blocks initiate_swap and accept_swap).
     Paused,
+    /// Maps swap_id → cancellation reason bytes. Set only when a swap is cancelled.
+    CancelReason(u64),
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
