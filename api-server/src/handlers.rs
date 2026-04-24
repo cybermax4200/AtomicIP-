@@ -1,6 +1,7 @@
 use axum::{extract::Path, http::StatusCode, Json};
-use crate::auth;
+use tracing::instrument;
 use crate::schemas::*;
+use crate::webhook;
 
 /// Timestamp a new IP commitment. Returns the assigned IP ID.
 #[utoipa::path(
@@ -13,6 +14,7 @@ use crate::schemas::*;
         (status = 400, description = "Invalid request (zero hash, duplicate hash)", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn commit_ip(Json(body): Json<CommitIpRequest>) -> Result<Json<u64>, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke ip_registry.commit_ip
     // For now, return a stub response
@@ -35,6 +37,7 @@ pub async fn commit_ip(Json(body): Json<CommitIpRequest>) -> Result<Json<u64>, (
         (status = 404, description = "IP record not found", body = ErrorResponse),
     )
 )]
+#[instrument]
 pub async fn get_ip(Path(ip_id): Path<u64>) -> Result<Json<IpRecord>, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke ip_registry.get_ip
     // For now, return a stub response
@@ -57,6 +60,7 @@ pub async fn get_ip(Path(ip_id): Path<u64>) -> Result<Json<IpRecord>, (StatusCod
         (status = 404, description = "IP record not found", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn transfer_ip(Json(body): Json<TransferIpRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke ip_registry.transfer_ip
     Err((
@@ -78,6 +82,7 @@ pub async fn transfer_ip(Json(body): Json<TransferIpRequest>) -> Result<StatusCo
         (status = 404, description = "IP record not found", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn verify_commitment(Json(body): Json<VerifyCommitmentRequest>) -> Result<Json<VerifyCommitmentResponse>, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke ip_registry.verify_commitment
     Err((
@@ -98,6 +103,7 @@ pub async fn verify_commitment(Json(body): Json<VerifyCommitmentRequest>) -> Res
         (status = 200, description = "List of IP IDs (null if none)", body = ListIpByOwnerResponse),
     )
 )]
+#[instrument]
 pub async fn list_ip_by_owner(Path(owner): Path<String>) -> Json<ListIpByOwnerResponse> {
     // TODO: Call Soroban RPC to invoke ip_registry.list_ip_by_owner
     Json(ListIpByOwnerResponse { ip_ids: None })
@@ -114,6 +120,7 @@ pub async fn list_ip_by_owner(Path(owner): Path<String>) -> Json<ListIpByOwnerRe
         (status = 400, description = "Seller is not IP owner or active swap exists", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn initiate_swap(Json(body): Json<InitiateSwapRequest>) -> Result<Json<u64>, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.initiate_swap
     Err((
@@ -137,8 +144,11 @@ pub async fn initiate_swap(Json(body): Json<InitiateSwapRequest>) -> Result<Json
         (status = 404, description = "Swap not found", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn accept_swap(Path(swap_id): Path<u64>, Json(body): Json<AcceptSwapRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.accept_swap
+    // Trigger webhook on status change (Pending -> Accepted)
+    webhook::trigger_swap_status_changed(swap_id, Some("Pending".to_string()), "Accepted".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -160,8 +170,11 @@ pub async fn accept_swap(Path(swap_id): Path<u64>, Json(body): Json<AcceptSwapRe
         (status = 404, description = "Swap not found", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn reveal_key(Path(swap_id): Path<u64>, Json(body): Json<RevealKeyRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.reveal_key
+    // Trigger webhook on status change (Accepted -> Completed)
+    webhook::trigger_swap_status_changed(swap_id, Some("Accepted".to_string()), "Completed".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -183,8 +196,11 @@ pub async fn reveal_key(Path(swap_id): Path<u64>, Json(body): Json<RevealKeyRequ
         (status = 404, description = "Swap not found", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn cancel_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelSwapRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.cancel_swap
+    // Trigger webhook on status change (Pending -> Cancelled)
+    webhook::trigger_swap_status_changed(swap_id, Some("Pending".to_string()), "Cancelled".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -206,8 +222,11 @@ pub async fn cancel_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelSwapRe
         (status = 404, description = "Swap not found", body = ErrorResponse),
     )
 )]
+#[instrument(skip(body))]
 pub async fn cancel_expired_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelExpiredSwapRequest>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.cancel_expired_swap
+    // Trigger webhook on status change (Accepted -> Cancelled)
+    webhook::trigger_swap_status_changed(swap_id, Some("Accepted".to_string()), "Cancelled".to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
@@ -227,6 +246,7 @@ pub async fn cancel_expired_swap(Path(swap_id): Path<u64>, Json(body): Json<Canc
         (status = 404, description = "Swap not found", body = ErrorResponse),
     )
 )]
+#[instrument]
 pub async fn get_swap(Path(swap_id): Path<u64>) -> Result<Json<SwapRecord>, (StatusCode, Json<ErrorResponse>)> {
     // TODO: Call Soroban RPC to invoke atomic_swap.get_swap
     Err((
@@ -237,52 +257,64 @@ pub async fn get_swap(Path(swap_id): Path<u64>) -> Result<Json<SwapRecord>, (Sta
     ))
 }
 
-/// Authenticate with Stellar keypair and receive JWT tokens.
+/// Register a webhook URL to receive swap event notifications.
 #[utoipa::path(
     post,
-    path = "/auth/login",
-    tag = "Auth",
-    request_body = LoginRequest,
+    path = "/webhooks",
+    tag = "Webhooks",
+    request_body = RegisterWebhookRequest,
     responses(
-        (status = 200, description = "Authenticated successfully", body = AuthResponse),
-        (status = 401, description = "Invalid signature", body = ErrorResponse),
-        (status = 400, description = "Invalid public key", body = ErrorResponse),
+        (status = 200, description = "Webhook registered", body = WebhookResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
     )
 )]
-pub async fn login(Json(body): Json<LoginRequest>) -> Result<Json<AuthResponse>, auth::AuthError> {
-    if !auth::verify_stellar_signature(&body.public_key, &body.message, &body.signature)? {
-        return Err(auth::AuthError::InvalidToken);
+pub async fn register_webhook(Json(body): Json<RegisterWebhookRequest>) -> Result<Json<WebhookResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if body.url.is_empty() || body.events.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "URL and events are required".to_string(),
+            }),
+        ));
     }
 
-    let (access_token, refresh_token) = auth::issue_tokens(&body.public_key)
-        .map_err(|_| auth::AuthError::TokenCreation)?;
+    let config = webhook::register(body.url, body.events);
 
-    Ok(Json(AuthResponse {
-        access_token,
-        refresh_token,
-        token_type: "Bearer".to_string(),
-        expires_in: 900, // 15 minutes
+    Ok(Json(WebhookResponse {
+        id: config.id.to_string(),
+        url: config.url,
+        events: config.events,
+        created_at: config.created_at,
     }))
 }
 
-/// Refresh access token using a valid refresh token.
+/// Unregister a webhook by ID.
 #[utoipa::path(
-    post,
-    path = "/auth/refresh",
-    tag = "Auth",
-    request_body = RefreshRequest,
+    delete,
+    path = "/webhooks/{id}",
+    tag = "Webhooks",
+    params(("id" = String, Path, description = "Webhook UUID")),
     responses(
-        (status = 200, description = "Token refreshed", body = AuthResponse),
-        (status = 401, description = "Invalid refresh token", body = ErrorResponse),
+        (status = 200, description = "Webhook unregistered"),
+        (status = 404, description = "Webhook not found", body = ErrorResponse),
     )
 )]
-pub async fn refresh_token(Json(body): Json<RefreshRequest>) -> Result<Json<AuthResponse>, auth::AuthError> {
-    let access_token = auth::refresh_access_token(&body.refresh_token)?;
+pub async fn unregister_webhook(Path(id): Path<String>) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let uuid = uuid::Uuid::parse_str(&id).map_err(|_| (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: "Invalid webhook ID format".to_string(),
+        }),
+    ))?;
 
-    Ok(Json(AuthResponse {
-        access_token,
-        refresh_token: body.refresh_token,
-        token_type: "Bearer".to_string(),
-        expires_in: 900,
-    }))
+    if webhook::unregister(uuid) {
+        Ok(StatusCode::OK)
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Webhook {} not found", id),
+            }),
+        ))
+    }
 }
