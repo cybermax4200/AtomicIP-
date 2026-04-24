@@ -6,6 +6,7 @@ use utoipa_swagger_ui::SwaggerUi;
 mod handlers;
 mod metrics;
 mod schemas;
+mod webhook;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -26,6 +27,8 @@ mod schemas;
         handlers::cancel_swap,
         handlers::cancel_expired_swap,
         handlers::get_swap,
+        handlers::register_webhook,
+        handlers::unregister_webhook,
     ),
     components(schemas(
         schemas::CommitIpRequest,
@@ -42,10 +45,13 @@ mod schemas;
         schemas::SwapRecord,
         schemas::SwapStatus,
         schemas::ErrorResponse,
+        schemas::RegisterWebhookRequest,
+        schemas::WebhookResponse,
     )),
     tags(
         (name = "IP Registry", description = "Commit and query intellectual property records"),
         (name = "Atomic Swap", description = "Trustless patent sale via atomic swap"),
+        (name = "Webhooks", description = "Real-time event notifications"),
     )
 )]
 pub struct ApiDoc;
