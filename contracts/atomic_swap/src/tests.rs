@@ -226,4 +226,43 @@ mod tests {
         assert_eq!(persisted, cached);
         assert_eq!(client.get_protocol_config(), cached);
     }
+
+    #[test]
+    fn test_key_revealed_event_fee_breakdown() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let (registry_id, ip_id, secret, blinding) = setup_registry(&env, &seller);
+        let price = 1000_i128;
+        let token_id = setup_token(&env, &admin, &buyer, price);
+
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        // 250 bps = 2.5% fee
+        client.admin_set_protocol_config(&250u32, &treasury, &86400u64);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &price, &buyer);
+        client.accept_swap(&swap_id);
+        client.reveal_key(&swap_id, &seller, &secret, &blinding);
+
+        let expected_fee = (price * 250) / 10000; // 25
+        let expected_seller = price - expected_fee;  // 975
+
+        let events = env.events().all();
+        let key_rev_event = events.iter().find(|(_, topics, _)| {
+            topics == &soroban_sdk::vec![&env, soroban_sdk::symbol_short!("key_rev").into()]
+        });
+        assert!(key_rev_event.is_some(), "key_rev event not found");
+
+        let (_, _, data) = key_rev_event.unwrap();
+        let event: crate::KeyRevealedEvent = soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(event.swap_id, swap_id);
+        assert_eq!(event.fee_amount, expected_fee);
+        assert_eq!(event.seller_amount, expected_seller);
+    }
 }

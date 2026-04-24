@@ -131,6 +131,8 @@ pub struct SwapCancelledEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
     pub swap_id: u64,
+    pub seller_amount: i128,
+    pub fee_amount: i128,
 }
 
 /// Payload published when protocol fee is deducted on swap completion.
@@ -374,7 +376,7 @@ impl AtomicSwap {
 
         env.events().publish(
             (soroban_sdk::symbol_short!("key_rev"),),
-            KeyRevealedEvent { swap_id },
+            KeyRevealedEvent { swap_id, seller_amount, fee_amount },
         );
     }
 

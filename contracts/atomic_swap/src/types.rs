@@ -91,6 +91,8 @@ pub struct SwapCancelledEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
     pub swap_id: u64,
+    pub seller_amount: i128,
+    pub fee_amount: i128,
 }
 
 /// Payload published when protocol fee is deducted on swap completion.
